@@ -185,3 +185,4 @@ models.yaml
 *.pdfs.zip.part.3
 
 otel-collector-config.yaml
+setup.sh
