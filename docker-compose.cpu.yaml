@@ -1,0 +1,204 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    env_file:
+      - .env
+    deploy:
+      replicas: 1
+    restart: always
+    volumes:
+      - ./models.yaml:/app/models.yaml:ro
+
+  task:
+    build:
+      context: .
+      dockerfile: docker/task/Dockerfile
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    env_file:
+      - .env
+    deploy:
+      replicas: 10
+    restart: always
+    volumes:
+      - ./models.yaml:/app/models.yaml:ro
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+    platform: linux/amd64
+    ports:
+      - "5173:8000"
+    env_file:
+      - .env
+    deploy:
+      replicas: 1
+    restart: always
+
+  segmentation:
+    image: nginx:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./nginx/segmentation.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - segmentation-backend
+    restart: always
+
+  segmentation-backend:
+    build:
+      context: .
+      dockerfile: docker/segmentation/Dockerfile
+    expose:
+      - "8000"
+    deploy:
+      replicas: 6
+      resources: {}
+    volumes:
+      - /dev/shm:/dev/shm
+    environment:
+      - MAX_BATCH_SIZE=64
+      - BATCH_WAIT_TIME=0.2
+      - OVERLAP_THRESHOLD=0.2
+      - SCORE_THRESHOLD=0.14
+      - OMP_NUM_THREADS=12
+      - MKL_NUM_THREADS=12
+      - NUMEXPR_NUM_THREADS=12
+    restart: always
+
+  ocr:
+    image: nginx:latest
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./nginx/ocr.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - ocr-backend
+    restart: always
+
+  postgres:
+    build:
+      context: docker/postgres
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: 1
+
+  adminer:
+    image: adminer:latest
+    ports:
+      - "8082:8080"
+    depends_on:
+      - postgres
+    restart: always
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      replicas: 1
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 30s
+      timeout: 20s
+      retries: 1
+
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin &&
+        /usr/bin/mc mb myminio/chunkr --ignore-existing &&
+        /usr/bin/mc anonymous set public myminio/chunkr
+      "
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.2
+    ports:
+      - "8080:8080"
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_PROXY=edge
+      - KC_DB=postgres
+      - KC_HOSTNAME_STRICT=false
+      - KC_HOSTNAME_STRICT_HTTPS=false
+      - KC_HTTP_ENABLED=true
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/keycloak
+      - KC_DB_USERNAME=postgres
+      - KC_DB_PASSWORD=postgres
+      - KC_HEALTH_ENABLED=true
+      - KC_TRANSACTION_XA_ENABLED=false
+    volumes:
+      - ./realm-export.json:/opt/keycloak/data/import/realm-export.json
+    command: [ "start-dev", "--import-realm" ]
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 600s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+
+  ocr-backend:
+    build:
+      context: .
+      dockerfile: docker/doctr-small/Dockerfile
+    deploy:
+      replicas: 3
+      resources: {}
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
