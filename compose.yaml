@@ -28,7 +28,7 @@ services:
     env_file:
       - .env
     deploy:
-      replicas: 30
+      replicas: 10
     restart: always
     volumes:
       - ./models.yaml:/app/models.yaml:ro
@@ -124,8 +124,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    deploy:
-      replicas: 1
 
   adminer:
     image: adminer:latest
@@ -147,8 +145,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    deploy:
-      replicas: 1
 
   minio:
     image: minio/minio:latest
